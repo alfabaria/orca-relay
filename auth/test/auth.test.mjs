@@ -274,6 +274,36 @@ describe('legacy tokens', () => {
   })
 })
 
+describe('malformed input', () => {
+  it('answers 4xx, never 500, to missing or non-string fields on every endpoint', async () => {
+    const session = await signIn()
+    const junk = [{}, { code: 123, codeVerifier: {}, redirectUri: [], state: 1 }, { refreshToken: 123 },
+      { refreshToken: { a: 1 } }, { refreshToken: null }, { relayHostId: 5, hostPublicKeyB64: [] }, []]
+    for (const path of ['session', 'refresh', 'logout', 'capabilities', 'org', 'profile', 'relay-token', 'nope']) {
+      for (const body of junk) {
+        for (const token of [undefined, session.accessToken, 'garbage']) {
+          const res = await post(path, body, token)
+          assert.ok(res.status >= 200 && res.status < 500, `${path} ${JSON.stringify(body)} -> ${res.status}`)
+          await res.arrayBuffer()
+        }
+      }
+    }
+    const notJson = await fetch(`${ctx.base}/v1/desktop/auth/refresh`, { method: 'POST', body: '{nope' })
+    assert.equal(notJson.status, 400)
+  })
+
+  it('answers 400, never 500, to a sign-in form with missing or repeated fields', async () => {
+    const base = { response_type: 'code', redirect_uri: REDIRECT, code_challenge: pkce().challenge, code_challenge_method: 'S256', state: 's' }
+    for (const extra of [{}, { email: 'alice@example.com' }, { password: 'x' }, { email: '', password: '' }]) {
+      const res = await fetch(`${ctx.base}/v1/desktop/auth/authorize`, {
+        method: 'POST', redirect: 'manual', body: new URLSearchParams({ ...base, ...extra })
+      })
+      assert.ok(res.status < 500, JSON.stringify(extra) + ' -> ' + res.status)
+      await res.arrayBuffer()
+    }
+  })
+})
+
 describe('administration effects', () => {
   it('stops an existing session the moment the user is disabled', async () => {
     const s = await signIn()
