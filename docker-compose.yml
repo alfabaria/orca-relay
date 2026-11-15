@@ -1,31 +1,53 @@
-# Self-hosted Orca Mobile relay: auth (sign-in shim) + relay (upstream), bound to loopback.
+# Self-hosted Orca Mobile relay: own sign-in service (auth/) + the official relay, on loopback.
 # TLS and public routing come from the host's nginx (see deploy/nginx.conf.template).
-# Both images build from github.com/hmseeb/orca-relay, pinned to one commit.
-# That repo has no license file, so its sources are not vendored here.
-# To update: review the new commit, then change the SHA in both build contexts.
+#
+# The relay builds unmodified from the official stablyai/orca repository (MIT) with its own
+# Dockerfile. The pin is the release tag of the Orca desktop version this was validated
+# against (v1.4.259). The relay shares its wire contract with the desktop and mobile
+# apps, so move the pin together with Orca upgrades. See README "Upgrading".
 
 services:
   auth:
     build:
-      context: https://github.com/hmseeb/orca-relay.git#88fd55e9694b1fc634daa48e9e1ac1fd8b084d7c:auth
+      context: ./auth
     restart: unless-stopped
     ports:
       - "127.0.0.1:${AUTH_PORT:-18081}:8080"
     environment:
       PORT: "8080"
-      AUTH_PASSWORD: ${AUTH_PASSWORD:?run scripts/init-env.sh}
       AUTH_SIGNING_KEY: ${AUTH_SIGNING_KEY:?run scripts/init-env.sh}
       AUTH_ISSUER: https://${AUTH_DOMAIN:?run scripts/init-env.sh}
+      AUTH_ORG_NAME: ${AUTH_ORG_NAME:-Orca Relay}
+      # Behind nginx: trust the client address nginx appends to X-Forwarded-For.
+      AUTH_TRUST_PROXY: "1"
+    volumes:
+      - auth_data:/data
     logging: &logs
       driver: json-file
       options:
         max-size: 10m
         max-file: "3"
 
+  # The official image runs as the unprivileged "node" user (uid 1000); a fresh named volume
+  # is owned by root, so fix ownership once before the relay starts.
+  relay-init:
+    image: busybox:1.37
+    user: "0"
+    command: ["chown", "-R", "1000:1000", "/data"]
+    volumes:
+      - relay_data:/data
+    restart: "no"
+
   relay:
     build:
-      context: https://github.com/hmseeb/orca-relay.git#88fd55e9694b1fc634daa48e9e1ac1fd8b084d7c:relay
+      # tag + checksum: BuildKit fetches the release tag and refuses to build if it no longer
+      # points at this exact commit.
+      context: "https://github.com/stablyai/orca.git?tag=v1.4.259&checksum=980c0024741812bd7ae934c0c22144d9926a784e&subdir=cloud"
+      dockerfile: apps/relay/Dockerfile
     restart: unless-stopped
+    depends_on:
+      relay-init:
+        condition: service_completed_successfully
     ports:
       - "127.0.0.1:${RELAY_PORT:-18082}:8080"
     # The relay fetches the auth service's signing keys from the public auth URL.
@@ -39,8 +61,9 @@ services:
       ORCA_RELAY_AUTH_ISSUER: https://${AUTH_DOMAIN}
       ORCA_RELAY_JWKS_URL: https://${AUTH_DOMAIN}/.well-known/jwks.json
       ORCA_RELAY_ASSIGNMENT_SIGNING_KEY: ${RELAY_ASSIGNMENT_SIGNING_KEY:?run scripts/init-env.sh}
+      ORCA_RELAY_DATA_DIR: /data/relay
       # Admin routes verify Google-issued tokens for these identities.
-      # The placeholders keep them unusable on a single-user relay.
+      # The placeholders keep them unusable on a self-hosted relay.
       ORCA_RELAY_ADMIN_AUDIENCE: https://admin.invalid
       ORCA_RELAY_DEPLOY_SERVICE_ACCOUNT: nobody@invalid.example
     volumes:
@@ -48,4 +71,5 @@ services:
     logging: *logs
 
 volumes:
+  auth_data:
   relay_data:
