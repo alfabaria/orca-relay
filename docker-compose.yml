@@ -1,0 +1,51 @@
+# Self-hosted Orca Mobile relay: auth (sign-in shim) + relay (upstream), bound to loopback.
+# TLS and public routing come from the host's nginx (see deploy/nginx.conf.template).
+# Both images build from github.com/hmseeb/orca-relay, pinned to one commit.
+# That repo has no license file, so its sources are not vendored here.
+# To update: review the new commit, then change the SHA in both build contexts.
+
+services:
+  auth:
+    build:
+      context: https://github.com/hmseeb/orca-relay.git#88fd55e9694b1fc634daa48e9e1ac1fd8b084d7c:auth
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${AUTH_PORT:-18081}:8080"
+    environment:
+      PORT: "8080"
+      AUTH_PASSWORD: ${AUTH_PASSWORD:?run scripts/init-env.sh}
+      AUTH_SIGNING_KEY: ${AUTH_SIGNING_KEY:?run scripts/init-env.sh}
+      AUTH_ISSUER: https://${AUTH_DOMAIN:?run scripts/init-env.sh}
+    logging: &logs
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+  relay:
+    build:
+      context: https://github.com/hmseeb/orca-relay.git#88fd55e9694b1fc634daa48e9e1ac1fd8b084d7c:relay
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${RELAY_PORT:-18082}:8080"
+    # The relay fetches the auth service's signing keys from the public auth URL.
+    # Resolve that name to the host (nginx) so it works without NAT hairpinning.
+    extra_hosts:
+      - "${AUTH_DOMAIN}:host-gateway"
+    environment:
+      PORT: "8080"
+      ORCA_RELAY_PUBLIC_URL: https://${RELAY_DOMAIN:?run scripts/init-env.sh}
+      ORCA_RELAY_CELL_URL: https://${RELAY_DOMAIN}
+      ORCA_RELAY_AUTH_ISSUER: https://${AUTH_DOMAIN}
+      ORCA_RELAY_JWKS_URL: https://${AUTH_DOMAIN}/.well-known/jwks.json
+      ORCA_RELAY_ASSIGNMENT_SIGNING_KEY: ${RELAY_ASSIGNMENT_SIGNING_KEY:?run scripts/init-env.sh}
+      # Admin routes verify Google-issued tokens for these identities.
+      # The placeholders keep them unusable on a single-user relay.
+      ORCA_RELAY_ADMIN_AUDIENCE: https://admin.invalid
+      ORCA_RELAY_DEPLOY_SERVICE_ACCOUNT: nobody@invalid.example
+    volumes:
+      - relay_data:/data
+    logging: *logs
+
+volumes:
+  relay_data:
