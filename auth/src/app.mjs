@@ -17,6 +17,10 @@ const MAX_PENDING_CODES = 1000
 const MAX_BODY = 64 * 1024
 const LOOPBACK_CALLBACK = /^http:\/\/127\.0\.0\.1:\d{1,5}\/auth\/callback$/
 const B64U = /^[A-Za-z0-9_-]+$/
+// Browsers also check a form's redirect target against form-action, so the desktop's loopback
+// callback must be listed or the sign-in submit is blocked after the password is accepted.
+const LOGIN_CSP =
+  "default-src 'none'; style-src 'unsafe-inline'; form-action 'self' http://127.0.0.1:*; frame-ancestors 'none'"
 
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`)
 
@@ -303,9 +307,7 @@ button{background:#eee;color:#111;cursor:pointer}p{color:#f77;margin:0}</style>
         'cache-control': 'no-store',
         'referrer-policy': 'no-referrer',
         'x-content-type-options': 'nosniff',
-        ...(type.startsWith('text/html')
-          ? { 'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'" }
-          : {})
+        ...(type.startsWith('text/html') ? { 'content-security-policy': LOGIN_CSP } : {})
       })
       res.end(type === 'application/json' ? JSON.stringify(body) : body)
     }

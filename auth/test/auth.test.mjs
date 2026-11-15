@@ -210,6 +210,33 @@ describe('sign-in', () => {
   })
 })
 
+describe('sign-in page', () => {
+  // Chrome blocks a form submit whose redirect leaves the CSP form-action list. curl does not,
+  // so check that the page's policy allows both the form's own origin and the loopback callback.
+  function allows(csp, target, self) {
+    const sources = /form-action ([^;]*)/.exec(csp)?.[1].split(/\s+/) ?? []
+    const url = new URL(target)
+    return sources.some((src) => {
+      if (src === "'self'") return url.origin === self
+      const m = /^(https?):\/\/([^:/]+):(\*|\d+)$/.exec(src)
+      return m && url.protocol === `${m[1]}:` && url.hostname === m[2] && (m[3] === '*' || url.port === m[3])
+    })
+  }
+
+  it('lets the browser submit the form and follow the redirect to the desktop callback', async () => {
+    const { challenge } = pkce()
+    const res = await fetch(`${ctx.base}/v1/desktop/auth/authorize?${new URLSearchParams({
+      client_id: 'orca-desktop', response_type: 'code', redirect_uri: REDIRECT,
+      code_challenge: challenge, code_challenge_method: 'S256', state: 's' })}`)
+    const csp = res.headers.get('content-security-policy')
+    assert.equal(res.status, 200)
+    assert.ok(allows(csp, `${ctx.base}/v1/desktop/auth/authorize`, ctx.base), 'form posts to the same origin')
+    assert.ok(allows(csp, `${REDIRECT}?code=c&state=s`, ctx.base), 'redirect to the loopback callback')
+    assert.ok(!allows(csp, 'https://evil.example/cb', ctx.base))
+    assert.ok(!allows(csp, 'http://localhost:53211/auth/callback', ctx.base))
+  })
+})
+
 describe('refresh tokens', () => {
   const refresh = (token) => post('refresh', { refreshToken: token })
 
